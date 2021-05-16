@@ -22,15 +22,30 @@ err() (
 )
 
 candidate_interfaces() (
-	ip -o link show |
-		awk -F': ' '{print $2}' |
-		sed 's/[ \t].*//;/^\(lo\|bond0\|\|\)$/d' |
-		sort
+	ip -o link show \
+	  | sed -e 's/^[0-9]*: \([^@:]*\)\(@[^:]*\)*:.*$/\1/; \
+		    /^\(lo\|bond[0-9]*\|\)$/d'
+	  | sort
+)
+
+is_dot1q_interface() (
+	local tink_interface=$1
+
+	return [[ "$tink_interface" =~ \.[0-9]+*$ ]]
 )
 
 validate_tinkerbell_network_interface() (
 	local tink_interface=$1
 
+	if is_dot1q_interface "$tink_interface" ; then
+		if candidate_interfaces | grep -q "^$tink_interface$"; then
+		    err "802.1q sub-interface $tink_interface already exists"
+		    return 1
+		else
+		    return 0
+		fi
+	fi
+		
 	if ! candidate_interfaces | grep -q "^$tink_interface$"; then
 		err "Invalid interface ($tink_interface) selected, must be one of:"
 		candidate_interfaces | err
@@ -48,6 +63,12 @@ generate_env() (
 	local tink_interface=$1
 
 	validate_tinkerbell_network_interface "$tink_interface"
+	local nginx_port
+	if is_dot1q_interface "$tink_interface" ; then
+	  nginx_port=8080
+	else
+	  nginx_port=80
+	fi
 
 	local tink_password
 	tink_password=$(generate_password)
@@ -56,6 +77,8 @@ generate_env() (
 
 	cat <<-EOF
 		# Tinkerbell Stack version
+		export COMPOSE_PROJECT_NAME=tinkerbell
+		export STATEDIR=./state
 
 		export OSIE_DOWNLOAD_LINK=${OSIE_DOWNLOAD_LINK}
 		export TINKERBELL_TINK_SERVER_IMAGE=${TINKERBELL_TINK_SERVER_IMAGE}
@@ -86,6 +109,7 @@ generate_env() (
 		# Docker Registry's username and password
 		export TINKERBELL_REGISTRY_USERNAME=admin
 		export TINKERBELL_REGISTRY_PASSWORD="$registry_password"
+		export TINKERBELL_NGINX_PORT="$nginx_port"
 
 		# Legacy options, to be deleted:
 		export FACILITY=onprem
@@ -96,7 +120,7 @@ generate_env() (
 
 main() (
 	if [[ -z ${1:-} ]]; then
-		err "Usage: $0 network-interface-name > .env"
+		err "Usage: $0 network-interface-name > .tink-env"
 		exit 1
 	fi
 

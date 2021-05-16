@@ -34,12 +34,12 @@ setup_nat() (
 main() (
 	export DEBIAN_FRONTEND=noninteractive
 
-	if ! [[ -f ./.env ]]; then
-		./generate-env.sh eth1 >.env
+	if ! [[ -f ./.tink-env ]]; then
+		./generate-env.sh eth1 > .tink-env
 	fi
 
 	# shellcheck disable=SC1091
-	source ./.env
+	source ./.tink-env
 
 	make_certs_writable
 

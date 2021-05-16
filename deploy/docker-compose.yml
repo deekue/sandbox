@@ -10,7 +10,7 @@ services:
       ROLLBAR_TOKEN: ${ROLLBAR_TOKEN:-ignored}
       ROLLBAR_DISABLE: ${ROLLBAR_DISABLE:-1}
       PGDATABASE: tinkerbell
-      PGHOST: db
+      PGHOST: 127.0.0.1
       PGPASSWORD: tinkerbell
       PGPORT: 5432
       PGSSLMODE: disable
@@ -30,10 +30,11 @@ services:
       timeout: 2s
       retries: 30
     volumes:
-      - ./state/certs:/certs/${FACILITY:-onprem}
-    ports:
-      - 42113:42113/tcp
-      - 42114:42114/tcp
+      - ${STATEDIR:-./state}/certs:/certs/${FACILITY:-onprem}
+#    ports:
+#      - 42113:42113/tcp
+#      - 42114:42114/tcp
+    network_mode: service:nginx
 
   tink-server-migration:
     image: ${TINKERBELL_TINK_SERVER_IMAGE}
@@ -42,7 +43,7 @@ services:
       ONLY_MIGRATION: "true"
       FACILITY: ${FACILITY:-onprem}
       PGDATABASE: tinkerbell
-      PGHOST: db
+      PGHOST: 127.0.0.1
       PGPASSWORD: tinkerbell
       PGPORT: 5432
       PGSSLMODE: disable
@@ -55,7 +56,8 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - ./state/certs:/certs/${FACILITY:-onprem}
+      - ${STATEDIR:-./state}/certs:/certs/${FACILITY:-onprem}
+    network_mode: service:nginx
 
   db:
     image: postgres:10-alpine
@@ -66,8 +68,9 @@ services:
       POSTGRES_USER: tinkerbell
     volumes:
       - postgres_data:/var/lib/postgresql/data:rw
-    ports:
-      - 5432:5432
+#    ports:
+#      - 5432:5432
+    network_mode: service:nginx
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tinkerbell"]
       interval: 1s
@@ -85,7 +88,7 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
-    network_mode: host
+    network_mode: service:nginx
 
   registry:
     build:
@@ -107,14 +110,14 @@ services:
       REGISTRY_AUTH_HTPASSWD_REALM: "Registry Realm"
       REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
     volumes:
-      - ./state/certs:/certs
-      - ./state/registry:/var/lib/registry
-    network_mode: host
+      - ${STATEDIR:-./state}/certs:/certs
+      - ${STATEDIR:-./state}/registry:/var/lib/registry
+    network_mode: service:nginx
 
   boots:
     image: ${TINKERBELL_TINK_BOOTS_IMAGE}
     restart: unless-stopped
-    network_mode: host
+    network_mode: service:nginx
     command: -dhcp-addr 0.0.0.0:67 -tftp-addr $TINKERBELL_HOST_IP:69 -http-addr $TINKERBELL_HOST_IP:80 -log-level DEBUG
     environment:
       API_AUTH_TOKEN: ${PACKET_API_AUTH_TOKEN:-ignored}
@@ -141,26 +144,32 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - $TINKERBELL_HOST_IP:80:80/tcp
-      - 67:67/udp
-      - 69:69/udp
+#    ports:
+#      - $TINKERBELL_HOST_IP:80:80/tcp
+#      - 67:67/udp
+#      - 69:69/udp
 
   nginx:
     image: nginx:alpine
     restart: unless-stopped
     tty: true
-    ports:
-      - 8080:80/tcp
+#    ports:
+#      - 8080:80/tcp
     volumes:
-      - ./state/webroot:/usr/share/nginx/html/
+      - ${STATEDIR:-./state}/webroot:/usr/share/nginx/html/
+      - ${STATEDIR:-./state}/nginx-templates:/etc/nginx/templates
+    environment:
+      - NGINX_PORT=${TINKERBELL_NGINX_PORT:-80}
+    networks:
+      vlan40:
+        ipv4_address: ${TINKERBELL_HOST_IP}
 
   hegel:
     image: ${TINKERBELL_TINK_HEGEL_IMAGE}
     restart: unless-stopped
-    network_mode: host
+    network_mode: service:nginx
     environment:
-      ROLLBAR_TOKEN: ${ROLLBAR_TOKEN-ignored}
+      ROLLBAR_TOKEN: ${ROLLBAR_TOKEN:-ignored}
       ROLLBAR_DISABLE: 1
       PACKET_ENV: testing
       PACKET_VERSION: ${PACKET_VERSION:-ignored}
@@ -177,3 +186,14 @@ services:
 
 volumes:
   postgres_data:
+
+networks:
+  vlan40:
+    driver: macvlan
+    driver_opts:
+      parent: ${TINKERBELL_NETWORK_INTERFACE}
+    ipam:
+      config:
+        - subnet: 192.168.40.0/24
+          ip_range: 192.168.40.0/28
+          gateway: 192.168.40.254

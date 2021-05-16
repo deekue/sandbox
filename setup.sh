@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 
 # stops the execution if a command or pipeline has an error
-set -euxo pipefail
+set -euEo pipefail
 
 # Tinkerbell stack Linux setup script
 #
 # See https://tinkerbell.org/setup for the installation steps.
 
 # file to hold all environment variables
-ENV_FILE=.env
+# renamed to .tink-env to avoid confusing docker-compose
+ENV_FILE=.tink-env
 
 SCRATCH=$(mktemp -d -t tmp.XXXXXXXXXX)
 readonly SCRATCH
@@ -19,7 +20,7 @@ trap finish EXIT
 
 DEPLOYDIR=$(pwd)/deploy
 readonly DEPLOYDIR
-readonly STATEDIR=$DEPLOYDIR/state
+# STATEDIR moved to ENV_FILE 
 
 if command -v tput >/dev/null && tput setaf 1 >/dev/null 2>&1; then
 	# color codes
@@ -94,6 +95,12 @@ setup_networking() (
 	local version=$2
 
 	setup_network_forwarding
+
+	# if interface is a 802.1q sub-interface, let Docker handle it
+	if [[ "${TINKERBELL_HOST_INTERFACE}" =~ ^[^.].[0-9]* ]] ; then
+		echo "$INFO using Docker MACVLAN for ${TINKERBELL_HOST_INTERFACE}"  
+		return 0
+	fi
 
 	if is_network_configured; then
 		echo "$INFO tinkerbell network interface is already configured"
@@ -413,6 +420,12 @@ setup_docker_registry() (
 	bootstrap_docker_registry
 )
 
+setup_nginx_templates() (
+	local tmpl_dir="$STATEDIR/nginx-templates"
+	mkdir -p "$tmpl_dir"
+	cp "$DEPLOYDIR/nginx.default.conf.template" "$tmpl_dir/default.conf.template"
+)
+
 start_components() (
 	local components=(db hegel tink-server boots tink-cli nginx)
 	for comp in "${components[@]}"; do
@@ -478,7 +491,7 @@ check_prerequisites() (
 )
 
 whats_next() (
-	echo "$NEXT  1. Enter /vagrant/deploy and run: source ../.env; docker-compose up -d"
+	echo "$NEXT  1. Enter /vagrant/deploy and run: source ../.tink-env; docker-compose up -d"
 	echo "$BLANK 2. Try executing your first workflow."
 	echo "$BLANK    Follow the steps described in https://tinkerbell.org/examples/hello-world/ to say 'Hello World!' with a workflow."
 )
@@ -503,6 +516,7 @@ do_setup() (
 	setup_osie
 	generate_certificates
 	setup_docker_registry
+	setup_nginx_templates
 
 	echo "$INFO tinkerbell stack setup completed successfully on $lsb_dist server"
 	whats_next | tee /tmp/post-setup-message
